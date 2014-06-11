@@ -11,6 +11,9 @@ if (!class_exists("cartpaujPM"))
     {
       $this->setupLinks();
       $this->adminOps = $this->getAdminOps();
+      // Assign numeric user ID corresponding to the messaging administrator; 0 if none.
+      $this->admin_user_id = $this->adminOps['admin_user_login'] ?
+        $this->convertToID($this->adminOps['admin_user_login']) : 0;
     }
 
     function pmActivate()
@@ -86,6 +89,9 @@ if (!class_exists("cartpaujPM"))
 
     var $tableMsgs = "";
 
+    // The user ID of the messaging administrator. 0 means there is none.
+    var $admin_user_id = 0;
+
     function jsInit()
     {
       if($_GET['pmjsscript'] == '1')
@@ -152,8 +158,14 @@ if (!class_exists("cartpaujPM"))
           <tr><th width='50%'>".__("Setting", "cartpaujpm")."</th><th width='50%'>".__("Value", "cartpaujpm")."</th></tr>
           </thead>
           <tr><td>".__("Max messages a user can keep in box? (0 = Unlimited)", "cartpaujpm")."<br /><small>".__("Admins always have Unlimited", "cartpaujpm")."</small></td><td><input type='text' size='10' name='num_messages' value='".$viewAdminOps['num_messages']."' /> ".__("Default","cartpaujpm").": 50</td></tr>
-          <tr><td>".__("Messages to show per page", "cartpaujpm")."<br/><small>".__("Do not set this to 0!", "cartpaujpm")."</small></td><td><input type='text' size='10' name='messages_page' value='".$viewAdminOps['messages_page']."' /> ".__("Default","cartpaujpm").": 15</td></tr>
-          <tr><td colspan='2'><input type='checkbox' name='hide_branding' ".checked(($viewAdminOps['hide_branding'] || $viewAdminOps['hide_branding'] == 'on'))." /> ".__("Hide \"Cartpauj PM\" Branding Footer", "cartpaujpm")."</td></tr>
+          <tr><td>".__("Messages to show per page", "cartpaujpm")."<br/><small>".__("Do not set this to 0!", "cartpaujpm")."</small></td><td><input type='text' size='10' name='messages_page' value='".$viewAdminOps['messages_page']."' /> ".__("Default","cartpaujpm").": 15</td></tr>" .
+          // Support for specifying the messaging administrator.
+          "<tr><td>" . __("Login name of administrative user", "cartpaujpm") .
+          "<br/><small>" . __("If set, only this user may list users or send messages to non-admin users", "cartpaujpm") .
+          "</small></td><td><input type='text' size='10' name='admin_user_login' value='" .
+          $viewAdminOps['admin_user_login'] . "' /> " . __("Default","cartpaujpm") . ": Empty</td></tr>" .
+          //
+          "<tr><td colspan='2'><input type='checkbox' name='hide_branding' ".checked(($viewAdminOps['hide_branding'] || $viewAdminOps['hide_branding'] == 'on'))." /> ".__("Hide \"Cartpauj PM\" Branding Footer", "cartpaujpm")."</td></tr>
           <tr><td colspan='2'><span><input class='button' type='submit' name='pm-admin-save' value='".__("Save Options", "cartpaujpm")."' /></span></td></tr>
           </table>
           </form>
@@ -171,6 +183,7 @@ if (!class_exists("cartpaujPM"))
       {
         $saveAdminOps = array('num_messages' 	=> $_POST['num_messages'],
                               'messages_page' => $_POST['messages_page'],
+                              'admin_user_login' => $_POST['admin_user_login'],
                               'hide_branding' => $_POST['hide_branding']
         );
         update_option($this->adminOpsName, $saveAdminOps);
@@ -183,6 +196,7 @@ if (!class_exists("cartpaujPM"))
     {
       $pmAdminOps = array('num_messages' => 50,
                           'messages_page' => 15,
+                          'admin_user_login' => '',
                           'hide_branding' => false
       );
 
@@ -260,20 +274,25 @@ if (!class_exists("cartpaujPM"))
     function dispNewMsg()
     {
       global $user_ID;
-      $users = $this->get_users();
-      $to = $_GET['to'];
-      if (!$to)
-        $to = 0;
 
       $adminOps = $this->getAdminOps();
       if (!$this->isBoxFull($user_ID, $adminOps['num_messages'], '1'))
       {
         $newMsg = "<p><strong>".__("Create New Message", "cartpaujpm").":</strong></p>";
-        $newMsg .= "<form name='message' action='".$this->actionURL."checkmessage' method='post'>".
-        __("To", "cartpaujpm").":<br/>".
-        "<input type='text' id='search-q' onkeyup='javascript:autosuggest(\"".$this->actionURL."\")' name='message_to' autocomplete='off' value='".$this->convertToUser($to)."' /><br/>
-        <div id='results'></div>".
-        __("Subject", "cartpaujpm").":<br/>
+        $newMsg .= "<form name='message' action='".$this->actionURL."checkmessage' method='post'>";
+
+        // Disallow recipient field if there is a messaging administrator and this person is not it.
+        if (!$this->admin_user_id || $this->admin_user_id == $user_ID) {
+          $to = $_GET['to'];
+          if (!$to) $to = 0;
+          $newMsg .= __("To", "cartpaujpm") . ":<br/>" .
+          "<input type='text' id='search-q' onkeyup='javascript:autosuggest(\"" .
+          $this->actionURL . "\")' name='message_to' autocomplete='off' value='" .
+          $this->convertToUser($to) . "' /><br/>";
+        }
+
+        $newMsg .= "<div id='results'></div>";
+        $newMsg .= __("Subject", "cartpaujpm").":<br/>
         <input type='text' name='message_title' maxlength='65' value='' /><br/>".
         __("Message", "cartpaujpm").":<br/>".$this->get_form_buttons()."<br/>
         <textarea name='message_content'></textarea>
@@ -382,16 +401,23 @@ if (!class_exists("cartpaujPM"))
     function dispCheckMsg()
     {
       global $wpdb, $user_ID;
+      $adminOps = $this->getAdminOps();
+
+      // Allow send to any user only for the messaging administrator, if there is one.
+      if ($this->admin_user_id && $this->admin_user_id != $user_ID) {
+        $to = $this->admin_user_id;
+      }
+      else {
+        $to = $this->convertToID($_POST['message_to']);
+      }
+
       $from = $_POST['message_from'];
-      $preTo = $_POST['message_to'];
-      $to = $this->convertToID($preTo);
       $myReplaceSub = array("'", "\\");//Make sure we get ' and \ out of the message title
       $title = str_replace($myReplaceSub, "", $this->input_filter($_POST['message_title']));
       $content = $this->input_filter($_POST['message_content']);
       $parentID = $_POST['parent_id'];
       $date = $_POST['message_date'];
       
-      $adminOps = $this->getAdminOps();
       if ($to)
         $toUserOps = $this->getUserOps($to);
 
@@ -748,11 +774,19 @@ if (!class_exists("cartpaujPM"))
 
     function dispMenu()
     {
+      global $user_ID;
+      $adminOps = $this->getAdminOps();
+
       $menu = "<div id='pm-menu'>";
       $menu .= "<a href='".$this->pageURL."'>".__("Message Box", "cartpaujpm")."</a> | ";
       $menu .= "<a href='".$this->actionURL."viewannouncements'>".__("Announcements", "cartpaujpm")."</a> | ";
       $menu .= "<a href='".$this->actionURL."newmessage'>".__("New Message", "cartpaujpm")."</a> | ";
-      $menu .= "<a href='".$this->actionURL."directory'>".__("Directory", "cartpaujpm")."</a> | ";
+
+      // Disallow directory if there is a messaging administrator and this person is not it.
+      if (!$this->admin_user_id || $this->admin_user_id == $user_ID) {
+        $menu .= "<a href='" . $this->actionURL . "directory'>" . __("Directory", "cartpaujpm") . "</a> | ";
+      }
+
       $menu .= "<a href='".$this->actionURL."settings'>".__("Settings", "cartpaujpm")."</a>";
       $menu .= "</div>";
       $menu .= "<div id='pm-content'>";
@@ -782,6 +816,13 @@ if (!class_exists("cartpaujPM"))
 
     function dispDirectory()
     {
+      global $user_ID;
+
+      // Disallow directory if there is a messaging administrator and this person is not it.
+      if ($this->admin_user_id && $this->admin_user_id != $user_ID) {
+        return '';
+      }
+
       $users = $this->get_users();
       $directory = "";
 

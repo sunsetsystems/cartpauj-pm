@@ -3,11 +3,11 @@
 Plugin Name: Cartpauj PM
 Plugin URI: http://cartpauj.icomnow.com/projects/cartpauj-pm-plugin
 Description: Cartpauj PM allows you to add a simple Private Messaging system to your WordPress site. The messaging is done entirely through the front-end of your site rather than the Dashboard. This is very helpful if you want to keep your users out of the Dashboard area. Enjoy! :)
-Version: 1.0.10
+Version: 1.0.11
 Author: Cartpauj
 Author URI: http://cartpauj.icomnow.com
 Text Domain: cartpaujpm
-Copyright: 2009-2011, cartpauj
+Copyright: 2009-2011, cartpauj; 2014, Rod Roark
 
 GNU General Public License, Free Software Foundation <http://creativecommons.org/licenses/GPL/2.0/>
 This program is free software; you can redistribute it and/or modify

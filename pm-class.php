@@ -165,7 +165,9 @@ if (!class_exists("cartpaujPM"))
           "</small></td><td><input type='text' size='10' name='admin_user_login' value='" .
           $viewAdminOps['admin_user_login'] . "' /> " . __("Default","cartpaujpm") . ": Empty</td></tr>" .
           //
-          "<tr><td colspan='2'><input type='checkbox' name='hide_branding' ".checked(($viewAdminOps['hide_branding'] || $viewAdminOps['hide_branding'] == 'on'))." /> ".__("Hide \"Cartpauj PM\" Branding Footer", "cartpaujpm")."</td></tr>
+          "<tr><td colspan='2'><input type='checkbox' name='hide_branding' " .
+          checked(!empty($viewAdminOps['hide_branding']), true, false) .
+          " /> " . __("Hide \"Cartpauj PM\" Branding Footer", "cartpaujpm") . "</td></tr>
           <tr><td colspan='2'><span><input class='button' type='submit' name='pm-admin-save' value='".__("Save Options", "cartpaujpm")."' /></span></td></tr>
           </table>
           </form>

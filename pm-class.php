@@ -45,9 +45,20 @@ if (!class_exists("cartpaujPM"))
             PRIMARY KEY (`id`))
             {$charset_collate};";
 
+      $sqlAtts = "CREATE TABLE {$this->tableAtts} ("          .
+        "`id`         int(11)      NOT NULL auto_increment, " .
+        "`message_id` int(11)      NOT NULL, "                .
+        "`filename`   varchar(255) NOT NULL DEFAULT '', "     .
+        "`mimetype`   varchar(255) NOT NULL DEFAULT '', "     .
+        "`contents`   longblob     NOT NULL, "                .
+        "PRIMARY KEY (`id`), "                                .
+        "KEY `message_id` (`message_id`)"                     .
+        ") $charset_collate;";
+
       require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
 
       dbDelta($sqlMsgs);
+      dbDelta($sqlAtts);
     }
 
     function widget($args)
@@ -88,6 +99,7 @@ if (!class_exists("cartpaujPM"))
     var $jsURL = "";
 
     var $tableMsgs = "";
+    var $tableAtts = "";
 
     // The user ID of the messaging administrator. 0 means there is none.
     var $admin_user_id = 0;
@@ -111,6 +123,7 @@ if (!class_exists("cartpaujPM"))
       $this->jsURL = $this->pluginURL."js/";
 
       $this->tableMsgs = $table_prefix."cartpauj_pm_messages";
+      $this->tableAtts = $table_prefix . "cartpauj_pm_attachments";
     }
 
     function addToWPHead()
@@ -281,7 +294,7 @@ if (!class_exists("cartpaujPM"))
       if (!$this->isBoxFull($user_ID, $adminOps['num_messages'], '1'))
       {
         $newMsg = "<p><strong>".__("Create New Message", "cartpaujpm").":</strong></p>";
-        $newMsg .= "<form name='message' action='".$this->actionURL."checkmessage' method='post'>";
+        $newMsg .= "<form name='message' action='{$this->actionURL}checkmessage' method='post' enctype='multipart/form-data'>";
 
         // Disallow recipient field if there is a messaging administrator and this person is not it.
         if (!$this->admin_user_id || $this->admin_user_id == $user_ID) {
@@ -298,6 +311,8 @@ if (!class_exists("cartpaujPM"))
         <input type='text' name='message_title' maxlength='65' value='' /><br/>".
         __("Message", "cartpaujpm").":<br/>".$this->get_form_buttons()."<br/>
         <textarea name='message_content'></textarea>
+        <input type='hidden' name='MAX_FILE_SIZE' value='64000000' />
+        <input type='file' name='attachment[]' multiple='multiple' /><br />
         <input type='hidden' name='message_from' value='".$user_ID."' />
         <input type='hidden' name='message_date' value='".current_time('mysql', $gmt = 1)."' />
         <input type='hidden' name='parent_id' value='0' /><br/>
@@ -356,20 +371,36 @@ if (!class_exists("cartpaujPM"))
 
         if ($post->parent_id == 0) //If it is the parent message
         {
-          $threadOut .= "<td class='pmtext'><strong>".__("Subject", "cartpaujpm").": </strong>".$this->output_filter($post->message_title)."<hr/>".apply_filters("comment_text", $this->autoembed($this->output_filter($post->message_contents)))."</td></tr>";
+          $threadOut .= "<td class='pmtext'><strong>" . __("Subject", "cartpaujpm") . ": </strong>" .
+            $this->output_filter($post->message_title) . "<hr/>";
         }
         else
         {
-          $threadOut .= "<td class='pmtext'>".apply_filters("comment_text", $this->autoembed($this->output_filter($post->message_contents)))."</td></tr>";
+          $threadOut .= "<td class='pmtext'>";
         }
+        $threadOut .= apply_filters("comment_text", $this->autoembed($this->output_filter($post->message_contents)));
+        // Write any attachment links.
+        $attres = $wpdb->get_results($wpdb->prepare("SELECT id, filename FROM " .
+          "{$this->tableAtts} WHERE message_id = %d ORDER BY id", $post->id));
+        if (!empty($attres)) {
+          $threadOut .= "<hr /><strong>" . __("Attached", "cartpaujpm") . ":</strong>";
+          foreach ($attres as $attrow) {
+            $attid = $attrow->id;
+            $threadOut .= " <a href='{$this->pluginURL}download.php?id=$attid'>" .
+              htmlspecialchars($attrow->filename) . "</a>";
+          }
+        }
+        $threadOut .= "</td></tr>";
       }
 
       //SHOW THE REPLY FORM
       $threadOut .= "</table>
       <p><strong>".__("Add Reply", "cartpaujpm").":</strong></p>
-      <form name='message' action='".$this->actionURL."checkmessage' method='post'>".
-      $this->get_form_buttons()."<br/>
+      <form name='message' action='{$this->actionURL}checkmessage' method='post' enctype='multipart/form-data'>" .
+      $this->get_form_buttons() . "<br/>
       <textarea name='message_content'></textarea>
+      <input type='hidden' name='MAX_FILE_SIZE' value='64000000' />
+      <input type='file' name='attachment[]' multiple='multiple' /><br />
       <input type='hidden' name='message_to' value='".$this->convertToUser($to)."' />
       <input type='hidden' name='message_title' value='".$re.$message_title."' />
       <input type='hidden' name='message_from' value='".$user_ID."' />
@@ -466,6 +497,38 @@ if (!class_exists("cartpaujPM"))
         $wpdb->query($wpdb->prepare("UPDATE {$this->tableMsgs} SET last_date = '{$date}' WHERE id = %d", $parentID));
         $wpdb->query($wpdb->prepare("UPDATE {$this->tableMsgs} SET to_del = 0 WHERE id = %d", $parentID));
         $wpdb->query($wpdb->prepare("UPDATE {$this->tableMsgs} SET from_del = 0 WHERE id = %d", $parentID));
+      }
+
+      // Store any attachments. Need the new message ID for this.
+      $message_id = $wpdb->insert_id;
+      if ($message_id === false) die("Internal error: {$this->tableMsgs} insert failed.");
+      if (!empty($_FILES['attachment']['name'])) {
+        foreach ($_FILES['attachment']['name'] as $key => $filename) {
+          if ('' === $filename || 0 == $_FILES['attachment']['size'][$key]) continue;
+          $filepath = $_FILES['attachment']['tmp_name'][$key];
+          // Get the mime type while we still have a file.
+          $mimetype = 'application/octet-stream';
+          if (function_exists('finfo_open')) {
+            $finfo = finfo_open(FILEINFO_MIME_TYPE);
+            $mimetype = finfo_file($finfo, $filepath);
+            finfo_close($finfo);
+          }
+          else {
+            $mimetype = mime_content_type($filepath);
+          }
+          // Get file contents.
+          $tmpfile = fopen($filepath, "r");
+          $contents = fread($tmpfile, $_FILES['attachment']['size'][$key]);
+          fclose($tmpfile);
+          // Insert the row.
+          $tmp = $wpdb->insert($this->tableAtts, array(
+            'message_id' => $message_id,
+            'filename'   => $filename,
+            'mimetype'   => $mimetype,
+            'contents'   => $contents,
+          ), array('%d', '%s', '%s', '%s'));
+          if ($tmp === false) die("Internal error: {$this->tableAtts} insert failed.");
+        }
       }
 
       $check = "<p><strong>".__("Message Sent", "cartpaujpm").":</strong></p>
@@ -603,20 +666,28 @@ if (!class_exists("cartpaujPM"))
       $toDuser = $wpdb->get_var($wpdb->prepare("SELECT to_user FROM {$this->tableMsgs} WHERE id = %d", $delID));
       $toDel = $wpdb->get_var($wpdb->prepare("SELECT to_del FROM {$this->tableMsgs} WHERE id = %d", $delID));
       $fromDel = $wpdb->get_var($wpdb->prepare("SELECT from_del FROM {$this->tableMsgs} WHERE id = %d", $delID));
+      $sqlAttr = "DELETE FROM a USING {$this->tableMsgs} AS m JOIN {$this->tableAtts} AS a " .
+        "WHERE (m.id = %d OR m.parent_id = %d) AND a.message_id = m.id";
 
       if ($toDuser == $user_ID)
       {
-        if ($fromDel == 0)
+        if ($fromDel == 0) {
           $wpdb->query($wpdb->prepare("UPDATE {$this->tableMsgs} SET to_del = 1 WHERE id = %d", $delID));
-        else
+        }
+        else {
+          $wpdb->query($wpdb->prepare($sqlAttr, $delID, $delID));
           $wpdb->query($wpdb->prepare("DELETE FROM {$this->tableMsgs} WHERE id = %d OR parent_id = %d", $delID, $delID));
+        }
       }
       else
       {
-        if ($toDel == 0)
+        if ($toDel == 0) {
           $wpdb->query($wpdb->prepare("UPDATE {$this->tableMsgs} SET from_del = 1 WHERE id = %d", $delID));
-        else
+        }
+        else {
+          $wpdb->query($wpdb->prepare($sqlAttr, $delID, $delID));
           $wpdb->query($wpdb->prepare("DELETE FROM {$this->tableMsgs} WHERE id = %d OR parent_id = %d", $delID, $delID));
+        }
       }
 
       $deleted = "<p><strong>".__("Message Deleted", "cartpaujpm").":</strong></p>
@@ -741,6 +812,7 @@ if (!class_exists("cartpaujPM"))
       if (current_user_can('level_9') && $_GET['del']) //Make sure only admins can delete announcements
       {
         $wpdb->query($wpdb->prepare("DELETE FROM {$this->tableMsgs} WHERE id = %d", $delID));
+        $wpdb->query($wpdb->prepare("DELETE FROM {$this->tableAtts} WHERE message_id = %d", $delID));
         return true;
       }
       return false;
